@@ -21,7 +21,6 @@
 @property (nonatomic) float fov;
 @property (nonatomic) float near;
 @property (nonatomic) float far;
-@property (nonatomic) simd_float3 forwardVector;
 
 -(CameraUniforms)getUniforms;
 -(matrix_float4x4)getViewMatrix;

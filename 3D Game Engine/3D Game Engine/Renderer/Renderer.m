@@ -7,248 +7,186 @@
 
 #import "Renderer.h"
 #import "Camera.h"
-#import "PrimitiveData.h"
+#import "Mesh.h"
 
 @implementation Renderer {
-    
-    id<MTL4CommandQueue> commandQueue;
-    
-    id<MTL4CommandBuffer> commandBuffer;
-    
-    // Resource bindings for render encoder
-    id<MTL4ArgumentTable> argumentTable;
-    
+    id<MTLCommandQueue> commandQueue;
     id<MTLRenderPipelineState> renderPipelineState;
+    id<MTLDepthStencilState> depthStencilState;
     
-    // Triangle mesh
-    Mesh* _triangleMesh;
-    
+    id<MTLSamplerState> _samplerState;
+    id<MTLTexture> _texture;
+
+    Mesh* _mesh;
     Camera* _camera;
+
     id<MTLBuffer> _cameraUniformsBuffer;
+    id<MTLBuffer> _objectUniformsBuffer;
+    
+    id<MTLBuffer> _lightUniformsBuffer;
+    id<MTLBuffer> _materialUniformsBuffer;
 }
 
-- (nonnull instancetype) initWithMetalKitView:(nonnull MTKView *) view {
-    
+- (nonnull instancetype) initWithMetalKitView:(nonnull MTKView *)view {
     self = [super init];
-    if (nil == self) {return nil;}
-    
-    // Setup all of our rendering objects
+    if (nil == self) { return nil; }
+
     _device = view.device;
-    commandQueue = [self.device newMTL4CommandQueue];
-    commandBuffer = [self.device newCommandBuffer];
     _defaultLibrary = [self.device newDefaultLibrary];
+
+    view.depthStencilPixelFormat = MTLPixelFormatDepth32Float;
+    MTLDepthStencilDescriptor *descriptor = [MTLDepthStencilDescriptor new];
+    descriptor.depthCompareFunction = MTLCompareFunctionLess;
+    descriptor.depthWriteEnabled = YES;
+    depthStencilState = [self.device newDepthStencilStateWithDescriptor:descriptor];
     
-    argumentTable = [self makeArgumentTable];
-    
+    commandQueue = [self.device newCommandQueue];
     renderPipelineState = [self compileRenderPipeline:view.colorPixelFormat];
-    
+
     _camera = [[Camera alloc] init];
-    _cameraUniformsBuffer = [self.device newBufferWithLength:sizeof(CameraUniforms)
-                                                     options:MTLResourceStorageModeShared];
     
+    MTLSamplerDescriptor *samplerDesc = [MTLSamplerDescriptor new];
+    samplerDesc.minFilter = MTLSamplerMinMagFilterLinear;
+    samplerDesc.magFilter = MTLSamplerMinMagFilterLinear;
+    samplerDesc.mipFilter = MTLSamplerMipFilterLinear;
+    samplerDesc.sAddressMode = MTLSamplerAddressModeRepeat;
+    samplerDesc.tAddressMode = MTLSamplerAddressModeRepeat;
+    _samplerState = [self.device newSamplerStateWithDescriptor:samplerDesc];
+
     [self drawStuff];
-    
+
     return self;
 }
 
-// Function where you add all the stuff you want to draw
 - (void) drawStuff {
-    // Make a triangle mesh
-    Vertex verts[3];
-    makeTriangle((simd_float3){  0.0f,  0.5f, -1.0f },
-                 (simd_float3){ -0.5f, -0.5f, -1.0f },
-                 (simd_float3){  0.5f, -0.5f, -1.0f },
-                 verts);
+    _mesh = [Mesh meshFromOBJNamed:@"teapot" device:self.device];
+
+    _cameraUniformsBuffer = [self.device newBufferWithLength:sizeof(CameraUniforms)
+                                                     options:MTLResourceStorageModeShared];
+    _objectUniformsBuffer = [self.device newBufferWithLength:sizeof(ObjectUniforms)
+                                                     options:MTLResourceStorageModeShared];
+
+    ObjectUniforms color = { .color = simd_make_float4(1, 0, 0, 1) };
+    memcpy(_objectUniformsBuffer.contents, &color, sizeof(ObjectUniforms));
     
-    _triangleMesh = [[Mesh alloc] initWithDevice:self.device
-                                        vertices:verts
-                                     vertexCount:3
-                                         indices:NULL
-                                      indexCount:0];
+    _lightUniformsBuffer = [self.device newBufferWithLength:sizeof(LightUniforms)
+                                            options:MTLResourceStorageModeShared];
+    _materialUniformsBuffer = [self.device newBufferWithLength:sizeof(MaterialUniforms)
+                                               options:MTLResourceStorageModeShared];
+
+    LightUniforms lightUniforms;
+    lightUniforms.position = simd_make_float4(5.0, 5.0, 10.0, 0.0);
+    lightUniforms.ambient  = simd_make_float4(0.3, 0.3, 0.3, 0.0);
+    lightUniforms.diffuse  = simd_make_float4(1.0, 1.0, 1.0, 0.0);
+    lightUniforms.specular = simd_make_float4(1.0, 1.0, 1.0, 0.0);
+
+    MaterialUniforms materialUniforms;
+    materialUniforms.ambient   = simd_make_float4(0.3, 0.3, 0.3, 0.0);
+    materialUniforms.diffuse   = simd_make_float4(1.0, 1.0, 1.0, 0.0);
+    materialUniforms.specular  = simd_make_float4(0.8, 0.8, 0.8, 0.0);
+    materialUniforms.shininess = simd_make_float4(64.0f, 0.0, 0.0, 0.0);
+    memcpy(_lightUniformsBuffer.contents, &lightUniforms, sizeof(LightUniforms));
+    memcpy(_materialUniformsBuffer.contents, &materialUniforms, sizeof(MaterialUniforms));
+    
+    _texture = [self loadTextureNamed:@"ceramic.jpg"];
 }
 
 - (void) renderFrameToView:(MTKView *)view {
-    
-    [_camera setAspectRatio:view.drawableSize.width/view.drawableSize.height];
-    
-    id<MTL4CommandBuffer> commandBuffer = [self.device newCommandBuffer];
-    id<MTL4CommandAllocator> commandAllocator = [self.device newCommandAllocator];
+    [_camera setAspectRatio:view.drawableSize.width / view.drawableSize.height];
+    view.clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1);
 
-    [commandBuffer beginCommandBufferWithAllocator:commandAllocator];
-    
     CameraUniforms uniforms = [_camera getUniforms];
     memcpy(_cameraUniformsBuffer.contents, &uniforms, sizeof(CameraUniforms));
-    
-    // Create our render pass encoder
-    id<MTL4RenderCommandEncoder> renderPassEncoder;
-    // Reuse current drawable's render pass descriptor
-    MTL4RenderPassDescriptor *configuration = view.currentMTL4RenderPassDescriptor;
-    renderPassEncoder = [commandBuffer renderCommandEncoderWithDescriptor:configuration];
-    renderPassEncoder.label = @"Render Pass Encoder";
-    
-    // Set our render pipeline state
-    [renderPassEncoder setRenderPipelineState:renderPipelineState];
-    [argumentTable setAddress:_triangleMesh.vertexBuffer.gpuAddress atIndex:InputBufferIndexForVertexData];
-    [argumentTable setAddress:_cameraUniformsBuffer.gpuAddress atIndex:InputBufferIndexForCameraUniforms];
-    
-    [renderPassEncoder setArgumentTable:argumentTable atStages:MTLRenderStageVertex];
 
-    // Draw the triangle
-    [renderPassEncoder drawPrimitives:MTLPrimitiveTypeTriangle
-                          vertexStart:0
-                          vertexCount:3];
+    id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
+    MTLRenderPassDescriptor *configuration = view.currentRenderPassDescriptor;
+    configuration.depthAttachment.loadAction = MTLLoadActionClear;
+    configuration.depthAttachment.clearDepth = 1.0;
+    configuration.colorAttachments[0].loadAction = MTLLoadActionClear;
+    configuration.colorAttachments[0].storeAction = MTLStoreActionStore;
+
+    id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:configuration];
+    encoder.label = @"Render Pass Encoder";
+    [encoder setRenderPipelineState:renderPipelineState];
+    [encoder setDepthStencilState:depthStencilState];
+    [encoder setCullMode:MTLCullModeNone];
+
+    [encoder setVertexBuffer:_mesh.vertexBuffer offset:0 atIndex:VertexBufferIndexForVertexData];
+    [encoder setVertexBuffer:_cameraUniformsBuffer offset:0 atIndex:VertexBufferIndexForCameraUniforms];
     
-    // End encoding
-    [renderPassEncoder endEncoding];
-    [commandBuffer endCommandBuffer];
-    
-    // Submit what we encoded to the buffer to be rendered
-    [self submitCommandBuffer:commandBuffer
-                 toCommandQueue:commandQueue
-                      forView:view];
+    [encoder setFragmentTexture:_texture atIndex:0];
+    [encoder setFragmentSamplerState:_samplerState atIndex:0];
+    [encoder setFragmentBuffer:_cameraUniformsBuffer offset:0 atIndex:FragmentBufferIndexForCameraUniforms];
+    [encoder setFragmentBuffer:_objectUniformsBuffer offset:0 atIndex:FragmentBufferIndexForObjectUniforms];
+    [encoder setFragmentBuffer:_lightUniformsBuffer offset:0 atIndex:FragmentBufferIndexForLightUniforms];
+    [encoder setFragmentBuffer:_materialUniformsBuffer offset:0 atIndex:FragmentBufferIndexForMaterialUniforms];
+    [encoder setFragmentBuffer:_cameraUniformsBuffer offset:0 atIndex:FragmentBufferIndexForCameraUniforms];
+
+    [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                        indexCount:_mesh.indexCount
+                         indexType:MTLIndexTypeUInt16
+                       indexBuffer:_mesh.indexBuffer
+                 indexBufferOffset:0];
+
+    [encoder endEncoding];
+    [commandBuffer presentDrawable:view.currentDrawable];
+    [commandBuffer commit];
 }
 
-- (id<MTL4ArgumentTable>) makeArgumentTable
-{
+- (id<MTLRenderPipelineState>) compileRenderPipeline:(MTLPixelFormat)colorPixelFormat {
     NSError *error = nil;
-    
-    MTL4ArgumentTableDescriptor *argumentTableDescriptor;
-    argumentTableDescriptor = [MTL4ArgumentTableDescriptor new];
-    argumentTableDescriptor.maxBufferBindCount = 2;
+    MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
+    descriptor.label = @"Render Pipeline";
+    descriptor.colorAttachments[0].pixelFormat = colorPixelFormat;
+    descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+    descriptor.vertexFunction = [self.defaultLibrary newFunctionWithName:@"vertexShader"];
+    descriptor.fragmentFunction = [self.defaultLibrary newFunctionWithName:@"fragmentShader"];
 
-    id<MTL4ArgumentTable> argumentTable;
-    argumentTable = [self.device newArgumentTableWithDescriptor:argumentTableDescriptor
-                                                          error:&error];
-    return argumentTable;
+    id<MTLRenderPipelineState> pipelineState = [self.device newRenderPipelineStateWithDescriptor:descriptor
+                                                                                           error:&error];
+    NSAssert(pipelineState, @"Pipeline compile error: %@", error);
+    return pipelineState;
 }
 
-- (void) submitCommandBuffer:(id<MTL4CommandBuffer>) commandBuffer
-              toCommandQueue:(id<MTL4CommandQueue>) commandQueue
-                     forView:(nonnull MTKView *) view
-{
-    // A drawable from the view that the method renders the frame to.
-    id<CAMetalDrawable> currentDrawable = view.currentDrawable;
-
-    // Instruct the queue to wait until the drawable is ready to receive output from the render pass.
-    [commandQueue waitForDrawable:currentDrawable];
-
-    // Submit command to the Metal device's queue.
-    [commandQueue commit:&commandBuffer count:1];
-
-    // Notify the drawable that the GPU is done running the render pass.
-    [commandQueue signalDrawable:currentDrawable];
-
-    // Instruct the drawable to show itself on the device's display when the render pass completes.
-    [currentDrawable present];
-}
-
-- (id<MTLRenderPipelineState>) compileRenderPipeline:(MTLPixelFormat) colorPixelFormat
-{
-    // A Metal 4 compiler instance with a default configuration.
-    NSError *error = nil;
-    id<MTL4Compiler> compiler = [self.device newCompilerWithDescriptor:[MTL4CompilerDescriptor new]
-                                                error:&error];
-
-    // A configuration for the render pipeline the method compiles.
-    MTL4RenderPipelineDescriptor* descriptor;
-    descriptor = [self configureRenderPipeline: colorPixelFormat];
-
-    id<MTLRenderPipelineState> renderPipelineState;
-    renderPipelineState = [compiler newRenderPipelineStateWithDescriptor:descriptor
-                                                     compilerTaskOptions:NULL
-                                                                   error:&error];
-    
-    return renderPipelineState;
-}
-
-- (MTL4RenderPipelineDescriptor*) configureRenderPipeline:(MTLPixelFormat) colorPixelFormat
-{
-    MTL4RenderPipelineDescriptor *renderPipelineDescriptor;
-    renderPipelineDescriptor = [MTL4RenderPipelineDescriptor new];
-    renderPipelineDescriptor.label = @"Basic Metal 4 render pipeline";
-
-    renderPipelineDescriptor.colorAttachments[0].pixelFormat = colorPixelFormat;
-    renderPipelineDescriptor.vertexFunctionDescriptor = [self makeVertexShaderConfiguration];
-    renderPipelineDescriptor.fragmentFunctionDescriptor = [self makeFragmentShaderConfiguration];
-
-    return renderPipelineDescriptor;
-}
-
-
-- (MTL4LibraryFunctionDescriptor*) makeVertexShaderConfiguration
-{
-    MTL4LibraryFunctionDescriptor *vertexFunction;
-    vertexFunction = [MTL4LibraryFunctionDescriptor new];
-    vertexFunction.library = self.defaultLibrary;
-    vertexFunction.name = @"vertexShader";
-
-    return vertexFunction;
-}
-
-- (MTL4LibraryFunctionDescriptor*) makeFragmentShaderConfiguration
-{
-    MTL4LibraryFunctionDescriptor *fragmentFunction;
-    fragmentFunction = [MTL4LibraryFunctionDescriptor new];
-    fragmentFunction.library = self.defaultLibrary;
-    fragmentFunction.name = @"fragmentShader";
-
-    return fragmentFunction;
-}
-
-NSString* printMatrix(simd_float4x4 m) {
-    return [NSString stringWithFormat:
-        @"[%.2f %.2f %.2f %.2f]\n"
-         "[%.2f %.2f %.2f %.2f]\n"
-         "[%.2f %.2f %.2f %.2f]\n"
-         "[%.2f %.2f %.2f %.2f]\n",
-        m.columns[0].x, m.columns[0].y, m.columns[0].z, m.columns[0].w,
-        m.columns[1].x, m.columns[1].y, m.columns[1].z, m.columns[1].w,
-        m.columns[2].x, m.columns[2].y, m.columns[2].z, m.columns[2].w,
-        m.columns[3].x, m.columns[3].y, m.columns[3].z, m.columns[3].w];
-}
-
-- (void)updateWithInput:(InputState)inputState {
+- (void) updateWithInput:(InputState)inputState {
     float movementSpeed = 0.05f;
-    float rotationSpeed = 0.002f;
+    float rotationSpeed = 0.007f;
 
     simd_float3 position = [_camera getPosition];
     simd_float3 rotation = [_camera getRotation];
-
-    // Rotation around y axis
     float yRot = rotation.y;
 
     simd_float3 forwardVector = simd_normalize(simd_make_float3(sinf(yRot), 0, -cosf(yRot)));
-    simd_float3 rightVector = simd_normalize(simd_make_float3(cosf(yRot), 0, sinf(yRot)));
+    simd_float3 rightVector   = simd_normalize(simd_make_float3(cosf(yRot), 0,  sinf(yRot)));
 
-    if (inputState.W) {
-        position += forwardVector * movementSpeed;
-    }
-    if (inputState.S) {
-        position -= forwardVector * movementSpeed;
-    }
-    if (inputState.A) {
-        position -= rightVector * movementSpeed;
-    }
-    if (inputState.D) {
-        position += rightVector * movementSpeed;
-    }
+    if (inputState.W) position += forwardVector * movementSpeed;
+    if (inputState.S) position -= forwardVector * movementSpeed;
+    if (inputState.A) position -= rightVector   * movementSpeed;
+    if (inputState.D) position += rightVector   * movementSpeed;
 
-    [_camera setPosition: position];
+    [_camera setPosition:position];
 
-    // Clamp x axis rotation, otherwise get gimbal lock glitches
-    float maxRotX = (M_PI_2 - 0.01f);
-
-    // Rotation around x axis
-    float xRot = rotation.x;
-    
-    xRot -= inputState.mouseDy * rotationSpeed;
+    float maxRotX = M_PI_2 - 0.01f;
+    float xRot = rotation.x - inputState.mouseDy * rotationSpeed;
     yRot += inputState.mouseDx * rotationSpeed;
 
-    if (xRot > maxRotX) xRot =  maxRotX;
-    if (xRot < -maxRotX) xRot = -maxRotX;
+    xRot = fmaxf(-maxRotX, fminf(maxRotX, xRot));
 
-    [_camera setRotation: simd_make_float3(xRot, yRot, 0)];
+    [_camera setRotation:simd_make_float3(xRot, yRot, 0)];
 }
 
+- (id<MTLTexture>) loadTextureNamed:(NSString *) name {
+    NSString *path = [[NSBundle mainBundle] pathForResource:name ofType:nil];
+    NSAssert(path, @"Texture '%@' not found", name);
+    
+    MTKTextureLoader *loader = [[MTKTextureLoader alloc] initWithDevice:self.device];
+    NSError *error = nil;
+    
+    id<MTLTexture> texture = [loader newTextureWithContentsOfURL:[NSURL fileURLWithPath:path]
+                                                         options:@{MTKTextureLoaderOptionSRGB: @NO, MTKTextureLoaderOptionGenerateMipmaps: @YES}
+                                                          error:&error];
+    NSAssert(texture, @"Failed to load texture: %@", error);
+    return texture;
+}
 
 @end

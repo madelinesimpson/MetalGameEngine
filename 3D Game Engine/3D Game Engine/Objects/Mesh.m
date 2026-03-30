@@ -33,5 +33,22 @@
     return self;
 }
 
+// Get the obj file
++ (instancetype)meshFromOBJNamed:(NSString*)name device:(id<MTLDevice>)device {
+    NSString* path = [[NSBundle mainBundle] pathForResource:name ofType:@"obj"];
+    NSAssert(path, @"OBJ file '%@.obj' not found", name);
+    return [Mesh meshFromFile:path device:device];
+}
+
++ (instancetype)meshFromFile:(NSString*)path device:(id<MTLDevice>)device {
+    MeshData data = MeshLoader_loadOBJ(path);
+    Mesh* mesh = [[Mesh alloc] initWithDevice:device
+                                     vertices:data.vertices
+                                  vertexCount:data.vertexCount
+                                      indices:data.indices
+                                   indexCount:data.indexCount];
+    MeshLoader_free(&data);
+    return mesh;
+}
 
 @end

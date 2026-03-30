@@ -14,7 +14,7 @@
 @implementation MetalKitViewDelegate
 {
 @protected
-    id<RendererProtocol> renderer;
+    Renderer* renderer;
     MTKView *metalKitView;
 }
 

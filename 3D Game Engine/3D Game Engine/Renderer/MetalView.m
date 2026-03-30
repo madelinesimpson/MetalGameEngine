@@ -32,7 +32,7 @@
     
     [self.window setAcceptsMouseMovedEvents:YES];
     [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:self.bounds
-                                                       options:NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect
+                                                       options:NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect
                                                          owner: self
                                                       userInfo: nil]];
 }
@@ -94,6 +94,16 @@
     mouseDy += dy;
     
     lastMouseLocation = location;
+}
+
+- (void)mouseExited:(NSEvent *)event {
+    hasInitialMouse = false;
+    mouseDx = 0;
+    mouseDy = 0;
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    hasInitialMouse = false;
 }
 
 - (InputState)getInputState {
