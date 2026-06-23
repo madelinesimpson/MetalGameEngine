@@ -14,8 +14,9 @@
 -(instancetype) initWithDevice:(id<MTLDevice>) device
                       vertices:(const Vertex*) vertices
                    vertexCount:(NSUInteger) vertexCount
-                       indices:(const uint16_t *) indices
+                       indices:(const uint32_t *) indices
                     indexCount:(NSUInteger) indexCount {
+    
     if (self = [super init]) {
         _device = device;
         _vertexBuffer = [device newBufferWithBytes:vertices
@@ -24,7 +25,7 @@
         _vertexCount = vertexCount;
         if (indices && indexCount > 0) {
             _indexBuffer = [device newBufferWithBytes:indices
-                                               length:sizeof(uint16_t) * indexCount
+                                               length:sizeof(uint32_t) * indexCount
                                               options:MTLResourceStorageModeShared];
             _indexCount = indexCount;
         }
@@ -51,4 +52,15 @@
     return mesh;
 }
 
++ (instancetype)meshWithVertices:(Vertex *)vertices
+                     vertexCount:(NSUInteger)vertexCount
+                         indices:(uint32_t *)indices
+                      indexCount:(NSUInteger)indexCount
+                          device:(id<MTLDevice>)device {
+    return [[Mesh alloc] initWithDevice:device
+                               vertices:vertices
+                            vertexCount:vertexCount
+                                indices:indices
+                             indexCount:indexCount];
+}
 @end

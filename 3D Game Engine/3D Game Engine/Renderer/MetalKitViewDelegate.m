@@ -9,6 +9,7 @@
 #import "MetalKitViewDelegate.h"
 #import "MetalView.h"
 #import "Renderer.h"
+#import "SceneManager.h"
 
 /// A class that renders each of the app's video frames.
 @implementation MetalKitViewDelegate
@@ -24,28 +25,16 @@
 /// instance of the appropriate renderer type.
 - (nonnull instancetype)initWithMetalKitView:(nonnull MTKView *)view
 {
-    renderer = nil;
-    metalKitView = nil;
-
     self = [super init];
     if (nil == self) { return nil; }
-
+    
     metalKitView = view;
-
-#if !TARGET_OS_SIMULATOR
-    if (@available(iOS 26.0, tvOS 26.0, macOS 26.0, *)) {
-        if ([view.device supportsFamily:MTLGPUFamilyMetal4]) {
-            // Create a Metal 4 renderer instance for the app's lifetime.
-            renderer = [[Renderer alloc] initWithMetalKitView:view];
-
-            return self;
-        }
-    }
-#endif
-
-    // Create a Metal renderer instance for the app's lifetime.
     renderer = [[Renderer alloc] initWithMetalKitView:view];
-    NSAssert(renderer, @"The delegate can't create a renderer instance.");
+    NSAssert(renderer, @"Failed to create renderer.");
+
+    renderer.minecraft = [[Minecraft alloc] initWithDevice:view.device];
+    SceneManager* sceneManager = [[SceneManager alloc] init];
+    [renderer.minecraft build:sceneManager];
 
     return self;
 }

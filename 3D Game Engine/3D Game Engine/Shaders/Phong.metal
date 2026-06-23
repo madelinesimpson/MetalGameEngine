@@ -8,7 +8,7 @@
 #import "ShaderTypes.h"
 using namespace metal;
 
-class PhongShading {
+class Phong {
 public:
     static float3 getPhongLighting(constant LightUniforms* lightUniforms,
                                    constant MaterialUniforms* materialUniforms,
@@ -17,7 +17,7 @@ public:
                                    float3 normal,
                                    float3 color) {
         
-        float3 l = normalize(lightUniforms->position.xyz - point);
+        float3 l = normalize(lightUniforms->position.xyz);
         float3 v = normalize(eye - point);
         float3 r = reflect(-l, normal);
         

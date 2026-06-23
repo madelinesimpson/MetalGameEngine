@@ -8,6 +8,7 @@
 #import "ViewController.h"
 #import "MetalView.h"
 #import "MetalKitViewDelegate.h"
+#import "CrosshairView.h"
 
 @implementation ViewController
 {
@@ -31,6 +32,10 @@
     NSAssert(delegate, @"The view controller can't make a delegate for the MetalKit view.");
 
     view.delegate = delegate;
+    
+    CrosshairView *crosshair = [[CrosshairView alloc] initWithFrame:self.view.bounds];
+    crosshair.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [self.view addSubview:crosshair];
 }
 
 // For keyboard input

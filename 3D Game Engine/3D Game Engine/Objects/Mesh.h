@@ -27,6 +27,11 @@
 // File loading
 + (instancetype)meshFromOBJNamed:(NSString*)name device:(id<MTLDevice>)device;
 + (instancetype)meshFromFile:(NSString*)path device:(id<MTLDevice>)device;
++ (instancetype)meshWithVertices:(Vertex *)vertices
+                     vertexCount:(NSUInteger)vertexCount
+                         indices:(uint32_t *)indices
+                      indexCount:(NSUInteger)indexCount
+                          device:(id<MTLDevice>)device;
 
 @end
 

@@ -17,7 +17,7 @@
 - (instancetype) init {
     // Set starting camera position
     if (self = [super init]) {
-        self.position = simd_make_float3(0, 1.5, 5);
+        self.position = simd_make_float3(0, 0, 0);
         self.rotation = simd_make_float3(0, 0, 0);
         self.scale = simd_make_float3(1, 1, 1);
         self.near = 0.1f;
@@ -37,16 +37,16 @@
 - (CameraUniforms) getUniforms {
     CameraUniforms cameraUniforms;
     
-    // Identity for model matrix
-    matrix_float4x4 modelMatrix = matrix_identity_float4x4;
-    
-    cameraUniforms.modelMatrix = modelMatrix;
     cameraUniforms.projectionMatrix = [self getProjectionMatrix];
     cameraUniforms.viewMatrix = [self getViewMatrix];
     
     cameraUniforms.position = simd_make_float4(self.position.xyz, 0.0);
     
-    
+    matrix_float4x4 rotOnly = matrix_identity_float4x4;
+    rotOnly = matrix_rotate(rotOnly, self.rotation.x, simd_make_float3(1,0,0));
+    rotOnly = matrix_rotate(rotOnly, self.rotation.y, simd_make_float3(0,1,0));
+    rotOnly = matrix_rotate(rotOnly, self.rotation.z, simd_make_float3(0,0,1));
+    cameraUniforms.skyboxViewMatrix = rotOnly;
     return cameraUniforms;
 }
 

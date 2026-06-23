@@ -13,18 +13,16 @@
     id<MTLCommandQueue> commandQueue;
     id<MTLRenderPipelineState> renderPipelineState;
     id<MTLDepthStencilState> depthStencilState;
-    
     id<MTLSamplerState> _samplerState;
-    id<MTLTexture> _texture;
-
-    Mesh* _mesh;
-    Camera* _camera;
 
     id<MTLBuffer> _cameraUniformsBuffer;
     id<MTLBuffer> _objectUniformsBuffer;
-    
     id<MTLBuffer> _lightUniformsBuffer;
     id<MTLBuffer> _materialUniformsBuffer;
+    
+    // Skybox
+    id<MTLRenderPipelineState> skyboxPipelineState;
+    id<MTLDepthStencilState> skyboxDepthStencilState;
 }
 
 - (nonnull instancetype) initWithMetalKitView:(nonnull MTKView *)view {
@@ -35,16 +33,14 @@
     _defaultLibrary = [self.device newDefaultLibrary];
 
     view.depthStencilPixelFormat = MTLPixelFormatDepth32Float;
-    MTLDepthStencilDescriptor *descriptor = [MTLDepthStencilDescriptor new];
-    descriptor.depthCompareFunction = MTLCompareFunctionLess;
-    descriptor.depthWriteEnabled = YES;
-    depthStencilState = [self.device newDepthStencilStateWithDescriptor:descriptor];
-    
+    MTLDepthStencilDescriptor *depthDesc = [MTLDepthStencilDescriptor new];
+    depthDesc.depthCompareFunction = MTLCompareFunctionLess;
+    depthDesc.depthWriteEnabled = YES;
+    depthStencilState = [self.device newDepthStencilStateWithDescriptor:depthDesc];
+
     commandQueue = [self.device newCommandQueue];
     renderPipelineState = [self compileRenderPipeline:view.colorPixelFormat];
 
-    _camera = [[Camera alloc] init];
-    
     MTLSamplerDescriptor *samplerDesc = [MTLSamplerDescriptor new];
     samplerDesc.minFilter = MTLSamplerMinMagFilterLinear;
     samplerDesc.magFilter = MTLSamplerMinMagFilterLinear;
@@ -53,80 +49,140 @@
     samplerDesc.tAddressMode = MTLSamplerAddressModeRepeat;
     _samplerState = [self.device newSamplerStateWithDescriptor:samplerDesc];
 
-    [self drawStuff];
+    _cameraUniformsBuffer   = [self.device newBufferWithLength:sizeof(CameraUniforms) options:MTLResourceStorageModeShared];
+    _lightUniformsBuffer    = [self.device newBufferWithLength:sizeof(LightUniforms) options:MTLResourceStorageModeShared];
+    _materialUniformsBuffer = [self.device newBufferWithLength:sizeof(MaterialUniforms) options:MTLResourceStorageModeShared];
+    
+    // Skybox stuff
+    NSError *error = nil;
+    MTLRenderPipelineDescriptor *desc = [MTLRenderPipelineDescriptor new];
+    desc.label = @"Skybox Pipeline";
+    desc.colorAttachments[0].pixelFormat = view.colorPixelFormat;
+    desc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+    desc.vertexFunction   = [self.defaultLibrary newFunctionWithName:@"skyboxVertex"];
+    desc.fragmentFunction = [self.defaultLibrary newFunctionWithName:@"skyboxFragment"];
+    skyboxPipelineState = [self.device newRenderPipelineStateWithDescriptor:desc error:&error];
+
+    MTLDepthStencilDescriptor *skyboxDepthDesc = [MTLDepthStencilDescriptor new];
+    skyboxDepthDesc.depthCompareFunction = MTLCompareFunctionLessEqual;
+    skyboxDepthDesc.depthWriteEnabled = NO;
+    skyboxDepthStencilState = [self.device newDepthStencilStateWithDescriptor:skyboxDepthDesc];
 
     return self;
 }
 
-- (void) drawStuff {
-    _mesh = [Mesh meshFromOBJNamed:@"teapot" device:self.device];
-
-    _cameraUniformsBuffer = [self.device newBufferWithLength:sizeof(CameraUniforms)
-                                                     options:MTLResourceStorageModeShared];
-    _objectUniformsBuffer = [self.device newBufferWithLength:sizeof(ObjectUniforms)
-                                                     options:MTLResourceStorageModeShared];
-
-    ObjectUniforms color = { .color = simd_make_float4(1, 0, 0, 1) };
-    memcpy(_objectUniformsBuffer.contents, &color, sizeof(ObjectUniforms));
-    
-    _lightUniformsBuffer = [self.device newBufferWithLength:sizeof(LightUniforms)
-                                            options:MTLResourceStorageModeShared];
-    _materialUniformsBuffer = [self.device newBufferWithLength:sizeof(MaterialUniforms)
-                                               options:MTLResourceStorageModeShared];
-
-    LightUniforms lightUniforms;
-    lightUniforms.position = simd_make_float4(5.0, 5.0, 10.0, 0.0);
-    lightUniforms.ambient  = simd_make_float4(0.3, 0.3, 0.3, 0.0);
-    lightUniforms.diffuse  = simd_make_float4(1.0, 1.0, 1.0, 0.0);
-    lightUniforms.specular = simd_make_float4(1.0, 1.0, 1.0, 0.0);
-
-    MaterialUniforms materialUniforms;
-    materialUniforms.ambient   = simd_make_float4(0.3, 0.3, 0.3, 0.0);
-    materialUniforms.diffuse   = simd_make_float4(1.0, 1.0, 1.0, 0.0);
-    materialUniforms.specular  = simd_make_float4(0.8, 0.8, 0.8, 0.0);
-    materialUniforms.shininess = simd_make_float4(64.0f, 0.0, 0.0, 0.0);
-    memcpy(_lightUniformsBuffer.contents, &lightUniforms, sizeof(LightUniforms));
-    memcpy(_materialUniformsBuffer.contents, &materialUniforms, sizeof(MaterialUniforms));
-    
-    _texture = [self loadTextureNamed:@"ceramic.jpg"];
-}
-
 - (void) renderFrameToView:(MTKView *)view {
-    [_camera setAspectRatio:view.drawableSize.width / view.drawableSize.height];
-    view.clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1);
+    if (!self.minecraft) { return; }
 
-    CameraUniforms uniforms = [_camera getUniforms];
-    memcpy(_cameraUniformsBuffer.contents, &uniforms, sizeof(CameraUniforms));
+    Camera *camera = self.minecraft.camera;
+    [camera setAspectRatio:view.drawableSize.width / view.drawableSize.height];
+    
+    // Same as sky
+    view.clearColor = MTLClearColorMake(0.678, 1.0, 0.984, 1.0);
+
+    // Upload camera uniforms
+    CameraUniforms cameraUniforms = [camera getUniforms];
+    memcpy(_cameraUniformsBuffer.contents, &cameraUniforms, sizeof(CameraUniforms));
+
+    // Upload first light from scene
+    if (self.minecraft.lights.count > 0) {
+        Light *light = self.minecraft.lights.firstObject;
+        LightUniforms lu = [light uniforms];
+        memcpy(_lightUniformsBuffer.contents, &lu, sizeof(LightUniforms));
+    }
 
     id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
     MTLRenderPassDescriptor *configuration = view.currentRenderPassDescriptor;
+    if (!configuration) { return; }
     configuration.depthAttachment.loadAction = MTLLoadActionClear;
     configuration.depthAttachment.clearDepth = 1.0;
-    configuration.colorAttachments[0].loadAction = MTLLoadActionClear;
-    configuration.colorAttachments[0].storeAction = MTLStoreActionStore;
 
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:configuration];
     encoder.label = @"Render Pass Encoder";
+    
+    if (self.minecraft.skybox) {
+        [encoder setRenderPipelineState:skyboxPipelineState];
+        [encoder setDepthStencilState:skyboxDepthStencilState];
+        [encoder setCullMode:MTLCullModeFront];
+
+        [encoder setVertexBuffer:self.minecraft.skybox.mesh.vertexBuffer offset:0 atIndex:0];
+        [encoder setVertexBytes:&cameraUniforms length:sizeof(CameraUniforms) atIndex:1];
+        [encoder setFragmentTexture:self.minecraft.skybox.material.texture atIndex:0];
+        [encoder setFragmentSamplerState:_samplerState atIndex:0];
+
+        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                            indexCount:self.minecraft.skybox.mesh.indexCount
+                             indexType:MTLIndexTypeUInt32
+                           indexBuffer:self.minecraft.skybox.mesh.indexBuffer
+                     indexBufferOffset:0
+                         instanceCount:1];
+        
+        [encoder setRenderPipelineState:renderPipelineState];
+        [encoder setDepthStencilState:depthStencilState];
+        [encoder setCullMode:MTLCullModeBack];
+    }
+
+    
     [encoder setRenderPipelineState:renderPipelineState];
     [encoder setDepthStencilState:depthStencilState];
     [encoder setCullMode:MTLCullModeNone];
 
-    [encoder setVertexBuffer:_mesh.vertexBuffer offset:0 atIndex:VertexBufferIndexForVertexData];
-    [encoder setVertexBuffer:_cameraUniformsBuffer offset:0 atIndex:VertexBufferIndexForCameraUniforms];
-    
-    [encoder setFragmentTexture:_texture atIndex:0];
+    // Perframe bindings shared
+    [encoder setVertexBytes:&cameraUniforms
+                     length:sizeof(CameraUniforms)
+                    atIndex:VertexBufferIndexForCameraUniforms];
+    [encoder setFragmentBuffer:_cameraUniformsBuffer offset:0 atIndex:FragmentBufferIndexForCameraUniforms];
+    [encoder setFragmentBuffer:_lightUniformsBuffer  offset:0 atIndex:FragmentBufferIndexForLightUniforms];
     [encoder setFragmentSamplerState:_samplerState atIndex:0];
-    [encoder setFragmentBuffer:_cameraUniformsBuffer offset:0 atIndex:FragmentBufferIndexForCameraUniforms];
-    [encoder setFragmentBuffer:_objectUniformsBuffer offset:0 atIndex:FragmentBufferIndexForObjectUniforms];
-    [encoder setFragmentBuffer:_lightUniformsBuffer offset:0 atIndex:FragmentBufferIndexForLightUniforms];
-    [encoder setFragmentBuffer:_materialUniformsBuffer offset:0 atIndex:FragmentBufferIndexForMaterialUniforms];
-    [encoder setFragmentBuffer:_cameraUniformsBuffer offset:0 atIndex:FragmentBufferIndexForCameraUniforms];
+    
+    NSMutableArray<GameObject *> *allObjects = [NSMutableArray array];
+    for (GameObject *root in self.minecraft.gameObjects) {
+        [self collectObjects:root results:allObjects];
+    }
 
-    [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                        indexCount:_mesh.indexCount
-                         indexType:MTLIndexTypeUInt16
-                       indexBuffer:_mesh.indexBuffer
-                 indexBufferOffset:0];
+    // Ground + player placed cubes live in the Block Grid, not the static
+    // gameObjects scene graph, since they're added/removed every frame as
+    // the player places/breaks blocks.
+    [allObjects addObjectsFromArray:self.minecraft.blockGrid.allCubes];
+
+    NSMutableDictionary<NSString *, NSMutableArray<GameObject *> *> *meshGroups = [NSMutableDictionary dictionary];
+
+    for (GameObject *obj in allObjects) {
+        NSString *key = [NSValue valueWithPointer:(__bridge void *)obj.mesh];
+        if (!meshGroups[key]) meshGroups[key] = [NSMutableArray array];
+        [meshGroups[key] addObject:obj];
+    }
+
+    for (NSString *key in meshGroups) {
+        NSArray<GameObject *> *group = meshGroups[key];
+        
+        // Build matrix buffer
+        simd_float4x4 *matrices = malloc(group.count * sizeof(simd_float4x4));
+        for (NSUInteger i = 0; i < group.count; i++) {
+            matrices[i] = group[i].getWorldMatrix;
+        }
+        
+        id<MTLBuffer> instanceBuf = [_device newBufferWithBytes:matrices
+                                                         length:group.count * sizeof(simd_float4x4)
+                                                        options:MTLResourceStorageModeShared];
+        free(matrices);
+        
+        Mesh *mesh = group[0].mesh;
+        Material *mat = group[0].material;
+        MaterialUniforms matUniforms = [mat uniforms];
+        
+        [encoder setVertexBuffer:mesh.vertexBuffer offset:0 atIndex:VertexBufferIndexForVertexData];
+        [encoder setVertexBuffer:instanceBuf offset:0 atIndex:VertexBufferIndexForModelMatrices];
+        [encoder setFragmentBytes:&matUniforms length:sizeof(MaterialUniforms) atIndex:FragmentBufferIndexForMaterialUniforms];
+        [encoder setFragmentTexture:mat.texture atIndex:0];
+        
+        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                            indexCount:mesh.indexCount
+                             indexType:MTLIndexTypeUInt32
+                           indexBuffer:mesh.indexBuffer
+                     indexBufferOffset:0
+                         instanceCount:group.count];
+    }
 
     [encoder endEncoding];
     [commandBuffer presentDrawable:view.currentDrawable];
@@ -139,7 +195,7 @@
     descriptor.label = @"Render Pipeline";
     descriptor.colorAttachments[0].pixelFormat = colorPixelFormat;
     descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
-    descriptor.vertexFunction = [self.defaultLibrary newFunctionWithName:@"vertexShader"];
+    descriptor.vertexFunction   = [self.defaultLibrary newFunctionWithName:@"vertexShader"];
     descriptor.fragmentFunction = [self.defaultLibrary newFunctionWithName:@"fragmentShader"];
 
     id<MTLRenderPipelineState> pipelineState = [self.device newRenderPipelineStateWithDescriptor:descriptor
@@ -148,45 +204,21 @@
     return pipelineState;
 }
 
-- (void) updateWithInput:(InputState)inputState {
-    float movementSpeed = 0.05f;
-    float rotationSpeed = 0.007f;
-
-    simd_float3 position = [_camera getPosition];
-    simd_float3 rotation = [_camera getRotation];
-    float yRot = rotation.y;
-
-    simd_float3 forwardVector = simd_normalize(simd_make_float3(sinf(yRot), 0, -cosf(yRot)));
-    simd_float3 rightVector   = simd_normalize(simd_make_float3(cosf(yRot), 0,  sinf(yRot)));
-
-    if (inputState.W) position += forwardVector * movementSpeed;
-    if (inputState.S) position -= forwardVector * movementSpeed;
-    if (inputState.A) position -= rightVector   * movementSpeed;
-    if (inputState.D) position += rightVector   * movementSpeed;
-
-    [_camera setPosition:position];
-
-    float maxRotX = M_PI_2 - 0.01f;
-    float xRot = rotation.x - inputState.mouseDy * rotationSpeed;
-    yRot += inputState.mouseDx * rotationSpeed;
-
-    xRot = fmaxf(-maxRotX, fminf(maxRotX, xRot));
-
-    [_camera setRotation:simd_make_float3(xRot, yRot, 0)];
+- (void)collectObjects:(GameObject *)object
+               results:(NSMutableArray<GameObject *> *)results {
+    [results addObject:object];
+    for (GameObject *child in object.children) {
+        [self collectObjects:child results:results];
+    }
 }
 
-- (id<MTLTexture>) loadTextureNamed:(NSString *) name {
-    NSString *path = [[NSBundle mainBundle] pathForResource:name ofType:nil];
-    NSAssert(path, @"Texture '%@' not found", name);
-    
-    MTKTextureLoader *loader = [[MTKTextureLoader alloc] initWithDevice:self.device];
-    NSError *error = nil;
-    
-    id<MTLTexture> texture = [loader newTextureWithContentsOfURL:[NSURL fileURLWithPath:path]
-                                                         options:@{MTKTextureLoaderOptionSRGB: @NO, MTKTextureLoaderOptionGenerateMipmaps: @YES}
-                                                          error:&error];
-    NSAssert(texture, @"Failed to load texture: %@", error);
-    return texture;
+- (void) updateWithInput:(InputState)inputState {
+    if (!self.minecraft) { return; }
+
+    // Camera movement and block place delete are both handled inside
+    // Minecraft since placing/deleting needs the camera's matrices
+    // (for raycasting) and the Block Grid it owns.
+    [self.minecraft updateWithInput:inputState];
 }
 
 @end

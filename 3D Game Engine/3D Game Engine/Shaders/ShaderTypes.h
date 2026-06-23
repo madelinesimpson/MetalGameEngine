@@ -15,6 +15,7 @@
 typedef enum VertexInputBufferIndex {
     VertexBufferIndexForVertexData = 0,
     VertexBufferIndexForCameraUniforms = 1,
+    VertexBufferIndexForModelMatrices = 2,
 } VertexInputBufferIndex;
 
 typedef enum FragmentInputBufferIndex {
@@ -27,20 +28,17 @@ typedef enum FragmentInputBufferIndex {
 typedef struct {
     simd_float4 position;
     simd_float4 normal;
-    simd_float2 uv;
     simd_float4 color;
+    simd_float2 uv;
+    simd_float2 padding;
 } Vertex;
 
 typedef struct {
     matrix_float4x4 projectionMatrix;
     matrix_float4x4 viewMatrix;
-    matrix_float4x4 modelMatrix;
+    matrix_float4x4 skyboxViewMatrix;
     simd_float4 position;
 } CameraUniforms;
-
-typedef struct {
-    simd_float4 color;
-} ObjectUniforms;
 
 typedef struct {
     simd_float4 position;

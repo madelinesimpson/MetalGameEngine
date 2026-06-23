@@ -14,7 +14,7 @@
 typedef struct {
     Vertex*   vertices;
     uint32_t  vertexCount;
-    uint16_t* indices;
+    uint32_t* indices;
     uint32_t  indexCount;
 } MeshData;
 

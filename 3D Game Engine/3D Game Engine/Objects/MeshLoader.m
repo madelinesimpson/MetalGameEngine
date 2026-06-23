@@ -73,28 +73,29 @@ MeshData MeshLoader_loadOBJ(NSString* path) {
             float u, v;
             sscanf(l+3, "%f %f", &u, &v);
             uvs[uvCount++] = simd_make_float2(u, 1.0f - v); // flip V for Metal
-
         } else if (strncmp(l, "f ", 2) == 0) { // Face
             OBJIndex face[4];
             int count = 0;
             const char* ptr = l + 2;
             while (*ptr && count < 4) {
                 int p=0, t=0, n=0;
-                if (sscanf(ptr, "%d/%d/%d", &p,&t,&n) == 3) {
+                int consumed = 0;
+                if (sscanf(ptr, "%d/%d/%d%n", &p,&t,&n,&consumed) == 3) {
                     face[count++] = (OBJIndex){p-1,t-1,n-1};
                 }
-                else if (sscanf(ptr, "%d//%d", &p,&n) == 2) {
+                else if (sscanf(ptr, "%d//%d%n", &p,&n,&consumed) == 2) {
                     face[count++] = (OBJIndex){p-1,-1,n-1};
                 }
-                else if (sscanf(ptr, "%d", &p) == 1) {
+                else if (sscanf(ptr, "%d/%d%n", &p,&t,&consumed) == 2) {
+                    face[count++] = (OBJIndex){p-1,t-1,-1};
+                }
+                else if (sscanf(ptr, "%d%n", &p,&consumed) == 1) {
                     face[count++] = (OBJIndex){p-1,-1,-1};
                 }
-                while (*ptr && *ptr != ' ') {
-                    ptr++;
-                }
-                while (*ptr == ' ') {
-                    ptr++;
-                }
+                else break;
+                
+                ptr += consumed;
+                while (*ptr == ' ') ptr++;
             }
             // Fan triangulation (handles quads)
             for (int i = 1; i < count-1; i++) {
@@ -108,7 +109,7 @@ MeshData MeshLoader_loadOBJ(NSString* path) {
 
     int totalVerts = faceCount * 3;
     Vertex* outVerts = malloc(sizeof(Vertex) * totalVerts);
-    uint16_t* outIndices = malloc(sizeof(uint16_t) * totalVerts);
+    uint32_t* outIndices = malloc(sizeof(uint32_t) * totalVerts);
 
     for (int i = 0; i < totalVerts; i++) {
         OBJIndex idx = faces[i];
@@ -126,7 +127,7 @@ MeshData MeshLoader_loadOBJ(NSString* path) {
         }
         
         outVerts[i].color = simd_make_float4(1, 1, 1, 1);
-        outIndices[i] = (uint16_t) i;
+        outIndices[i] = (uint32_t) i;
     }
     
     // If obj file doesn't have normals, calculate them
